@@ -405,6 +405,7 @@ github.com/hashicorp/aws-sdk-go-base v0.4.0/go.mod h1:eRhlz3c4nhqxFZJAahJEFL7gh6
 github.com/hashicorp/consul v0.0.0-20171026175957-610f3c86a089/go.mod h1:mFrjN1mfidgJfYP1xrJCF+AfRhr6Eaqhb2+sfyn/OOI=
 github.com/hashicorp/consul v1.8.0 h1:yRKMKZyPLqUxl37t4nFt5OuGmTXoFhTJrakhfnYKCYA=
 github.com/hashicorp/consul v1.8.0/go.mod h1:Gg9/UgAQ9rdY3CTvzQZ6g2jcIb7NlIfjI+0pvLk5D1A=
+github.com/hashicorp/consul v1.8.4 h1:XaCg97pt9APNhsaPAR6cd31psiWcO+cz+p9SBefnTtM=
 github.com/hashicorp/consul-template v0.25.0/go.mod h1:/vUsrJvDuuQHcxEw0zik+YXTS7ZKWZjQeaQhshBmfH0=
 github.com/hashicorp/consul/api v1.4.0/go.mod h1:xc8u05kyMa3Wjr9eEAsIAo3dg8+LywT5E/Cl7cNS5nU=
 github.com/hashicorp/consul/api v1.5.0 h1:Yo2bneoGy68A7aNwmuETFnPhjyBEm7n3vzRacEVMjvI=

@@ -97,6 +97,7 @@ const baseAddressStr = `
     tags            = {{hclStringList .Tags}}
     namespace       = {{hclString .Namespace}}
     status          = "{{.Status}}"
+    checks          = {{hclConsulHealthChecks .Checks 3}}
     node            = "{{.Node}}"
     node_id         = "{{.NodeID}}"
     node_address    = "{{.NodeAddress}}"
@@ -106,3 +107,13 @@ const baseAddressStr = `
   }{{if (ne $i $last)}},{{- end}}
   {{- end}}
 {{- end}}`
+
+// const baseAddressStr = `
+// {{- with $srv := service "%s"}}
+//   {{- $last := len $srv | subtract 1}}
+//   {{- range $i, $s := $srv}}
+//   "{{.ID}}" : {
+// 		{{hclServiceHealth $s}}
+//   }{{if (ne $i $last)}},{{- end}}
+//   {{- end}}
+// {{- end}}`

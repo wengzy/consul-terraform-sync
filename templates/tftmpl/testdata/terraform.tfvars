@@ -12,14 +12,21 @@ testProvider = {
 
 services = {
   "api" : {
-    id              = "api"
-    name            = "api"
-    address         = "1.2.3.4"
-    port            = 8080
-    meta            = {}
-    tags            = ["tag"]
-    namespace       = null
-    status          = "passing"
+    id        = "api"
+    name      = "api"
+    address   = "1.2.3.4"
+    port      = 8080
+    meta      = {}
+    tags      = ["tag"]
+    namespace = null
+    status    = "passing"
+    checks = [
+      {
+        node = "foobar"
+        check_id = "checkid"
+        status = "passing" 
+      }
+    ]
     node            = "node-39e5a7f5-2834-e16d-6925-78167c9f50d8"
     node_id         = "39e5a7f5-2834-e16d-6925-78167c9f50d8"
     node_address    = "127.0.0.1"

@@ -23,6 +23,7 @@ services = {
     tags            = {{hclStringList .Tags}}
     namespace       = {{hclString .Namespace}}
     status          = "{{.Status}}"
+    checks          = {{hclConsulHealthChecks .Checks 3}}
     node            = "{{.Node}}"
     node_id         = "{{.NodeID}}"
     node_address    = "{{.NodeAddress}}"
