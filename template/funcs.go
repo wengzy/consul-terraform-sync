@@ -1,18 +1,10 @@
-package tftmpl
+package template
 
 import (
 	"fmt"
 	"sort"
 	"strings"
 )
-
-// HCLTmplFuncMap are template functions for rendering HCL
-var HCLTmplFuncMap = map[string]interface{}{
-	"hclString":     HCLString,
-	"hclStringList": HCLStringList,
-	"hclStringMap":  HCLStringMap,
-	"joinStrings":   JoinStrings,
-}
 
 // JoinStrings joins an optional number of strings with the separator while
 // omitting empty strings from the combined string. This is useful for

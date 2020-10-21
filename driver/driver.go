@@ -1,6 +1,10 @@
 package driver
 
-import "context"
+import (
+	"context"
+
+	"github.com/hashicorp/consul-terraform-sync/template"
+)
 
 //go:generate mockery --name=Driver --filename=driver.go  --output=../mocks/driver
 
@@ -11,10 +15,10 @@ type Driver interface {
 	Init(ctx context.Context) error
 
 	// InitTask initializes the task that the driver executes
-	InitTask(task Task, force bool) error
+	InitTask(task Task, force bool) (template.Template, error)
 
 	// ApplyTask applies change for the task managed by the driver
-	ApplyTask(ctx context.Context) error
+	ApplyTask(ctx context.Context, taskName string) error
 
 	// Version returns the version of the driver.
 	Version() string

@@ -4,22 +4,19 @@ import (
 	"context"
 	"errors"
 	"log"
-	"os"
-	"path"
 	"strings"
 
 	"github.com/hashicorp/consul-terraform-sync/config"
 	"github.com/hashicorp/consul-terraform-sync/driver"
 	"github.com/hashicorp/consul-terraform-sync/handler"
-	"github.com/hashicorp/consul-terraform-sync/templates/tftmpl"
-	"github.com/hashicorp/hcat"
 )
-
-const filePerm = os.FileMode(0640)
 
 // Controller describes the interface for monitoring Consul for relevant changes
 // and triggering the driver to update network infrastructure.
 type Controller interface {
+	// Config() *config.Config
+	// NewDriver() driver.Driver
+
 	// Init initializes elements needed by controller
 	Init(ctx context.Context) error
 
@@ -31,10 +28,10 @@ type Oncer interface {
 	Once(ctx context.Context) error
 }
 
-func newDriverFunc(conf *config.Config) (func(*config.Config) driver.Driver, error) {
+func newDriver(conf *config.Config) (driver.Driver, error) {
 	if conf.Driver.Terraform != nil {
 		log.Printf("[INFO] (ctrl) setting up Terraform driver")
-		return newTerraformDriver, nil
+		return newTerraformDriver(conf), nil
 	}
 	return nil, errors.New("unsupported driver")
 }
@@ -94,32 +91,6 @@ func newDriverTasks(conf *config.Config) []driver.Task {
 	}
 
 	return tasks
-}
-
-// newTaskTemplate creates templates to be monitored and rendered.
-func newTaskTemplate(taskName string, conf *config.Config, fileReader func(string) ([]byte, error)) (template, error) {
-	if conf.Driver.Terraform == nil {
-		return nil, errors.New("unsupported driver to run tasks")
-	}
-
-	tmplFullpath := path.Join(*conf.Driver.Terraform.WorkingDir, taskName, tftmpl.TFVarsTmplFilename)
-	tfvarsFilepath := strings.TrimRight(tmplFullpath, ".tmpl")
-
-	content, err := fileReader(tmplFullpath)
-	if err != nil {
-		return nil, err
-	}
-
-	renderer := hcat.NewFileRenderer(hcat.FileRendererInput{
-		Path:  tfvarsFilepath,
-		Perms: filePerm,
-	})
-
-	return hcat.NewTemplate(hcat.TemplateInput{
-		Contents:     string(content),
-		Renderer:     renderer,
-		FuncMapMerge: tftmpl.HCLTmplFuncMap,
-	}), nil
 }
 
 // getService is a helper to find and convert a user-defined service

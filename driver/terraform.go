@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
-	"github.com/hashicorp/consul-terraform-sync/templates/tftmpl"
+	tmpl "github.com/hashicorp/consul-terraform-sync/template"
+	"github.com/hashicorp/consul-terraform-sync/template/tftmpl"
 	"github.com/pkg/errors"
 )
 
@@ -41,9 +43,11 @@ type Terraform struct {
 	persistLog        bool
 	path              string
 	workingDir        string
-	worker            *worker
 	backend           map[string]interface{}
 	requiredProviders map[string]interface{}
+
+	workers    map[string]*worker
+	workersMux sync.Mutex
 
 	version    string
 	clientType string
@@ -71,6 +75,7 @@ func NewTerraform(config *TerraformConfig) *Terraform {
 		workingDir:        config.WorkingDir,
 		backend:           config.Backend,
 		requiredProviders: config.RequiredProviders,
+		workers:           make(map[string]*worker),
 		clientType:        config.ClientType,
 	}
 }
@@ -120,12 +125,12 @@ func (tf *Terraform) Version() string {
 
 // InitTask initializes the task by creating the Terraform root module and
 // client to execute task.
-func (tf *Terraform) InitTask(task Task, force bool) error {
+func (tf *Terraform) InitTask(task Task, force bool) (tmpl.Template, error) {
 	modulePath := filepath.Join(tf.workingDir, task.Name)
 	if _, err := os.Stat(modulePath); os.IsNotExist(err) {
 		if err := os.Mkdir(modulePath, workingDirPerms); err != nil {
 			log.Printf("[ERR] (driver.terraform) error creating task work directory: %s", err)
-			return err
+			return nil, err
 		}
 	}
 
@@ -144,7 +149,7 @@ func (tf *Terraform) InitTask(task Task, force bool) error {
 	for _, vf := range task.VarFiles {
 		tfvars, err := tftmpl.LoadModuleVariables(vf)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if len(vars) == 0 {
@@ -173,7 +178,7 @@ func (tf *Terraform) InitTask(task Task, force bool) error {
 	input.Init()
 
 	if err := tftmpl.InitRootModule(&input, modulePath, filePerms, force); err != nil {
-		return err
+		return nil, err
 	}
 
 	worker, err := newWorker(&workerConfig{
@@ -186,16 +191,25 @@ func (tf *Terraform) InitTask(task Task, force bool) error {
 	})
 	if err != nil {
 		log.Printf("[ERR] (driver.terraform) init worker error: %s", err)
-		return err
+		return nil, err
 	}
-	tf.worker = worker
-	return nil
+
+	tf.workersMux.Lock()
+	tf.workers[task.Name] = worker
+	tf.workersMux.Unlock()
+
+	tmplPath := filepath.Join(tf.workingDir, task.Name, tftmpl.TFVarsTmplFilename)
+	return tmpl.NewTaskTemplate(tmplPath)
 }
 
 // ApplyTask applies the task changes.
-func (tf *Terraform) ApplyTask(ctx context.Context) error {
-	w := tf.worker
-	taskName := w.task.Name
+func (tf *Terraform) ApplyTask(ctx context.Context, taskName string) error {
+	tf.workersMux.Lock()
+	w, ok := tf.workers[taskName]
+	tf.workersMux.Unlock()
+	if !ok {
+		return fmt.Errorf("task %s has not been initialized", taskName)
+	}
 
 	if w.inited {
 		log.Printf("[TRACE] (driver.terraform) workspace for task already "+

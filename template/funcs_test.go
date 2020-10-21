@@ -1,4 +1,4 @@
-package tftmpl
+package template
 
 import (
 	"testing"

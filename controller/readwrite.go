@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/consul-terraform-sync/config"
 	"github.com/hashicorp/consul-terraform-sync/driver"
 	"github.com/hashicorp/consul-terraform-sync/handler"
+	"github.com/hashicorp/consul-terraform-sync/template"
 	"github.com/hashicorp/hcat"
 )
 
@@ -17,25 +18,19 @@ var _ Controller = (*ReadWrite)(nil)
 
 // ReadWrite is the controller to run in read-write mode
 type ReadWrite struct {
-	conf       *config.Config
-	newDriver  func(*config.Config) driver.Driver
-	fileReader func(string) ([]byte, error)
-	units      []unit
-	watcher    watcher
-	resolver   resolver
-	postApply  handler.Handler
-}
+	conf      *config.Config
+	driver    driver.Driver
+	watcher   template.Watcher
+	resolver  template.Resolver
+	postApply handler.Handler
 
-// unit of work per template/task
-type unit struct {
-	taskName string
-	driver   driver.Driver
-	template template
+	taskTemplates map[string]template.Template
+	taskMux       sync.RWMutex
 }
 
 // NewReadWrite configures and initializes a new ReadWrite controller
 func NewReadWrite(conf *config.Config) (*ReadWrite, error) {
-	nd, err := newDriverFunc(conf)
+	d, err := newDriver(conf)
 	if err != nil {
 		return nil, err
 	}
@@ -48,12 +43,12 @@ func NewReadWrite(conf *config.Config) (*ReadWrite, error) {
 		return nil, err
 	}
 	return &ReadWrite{
-		conf:       conf,
-		newDriver:  nd,
-		fileReader: ioutil.ReadFile,
-		watcher:    watcher,
-		resolver:   hcat.NewResolver(),
-		postApply:  h,
+		conf:          conf,
+		driver:        d,
+		taskTemplates: make(map[string]template.Template),
+		watcher:       watcher,
+		resolver:      hcat.NewResolver(),
+		postApply:     h,
 	}, nil
 }
 
@@ -61,43 +56,29 @@ func NewReadWrite(conf *config.Config) (*ReadWrite, error) {
 // driver is initializes, works are created for each task.
 func (rw *ReadWrite) Init(ctx context.Context) error {
 	log.Printf("[INFO] (ctrl) initializing driver")
+	if err := rw.driver.Init(ctx); err != nil {
+		log.Printf("[ERR] (ctrl) error initializing driver: %s", err)
+		return err
+	}
+	log.Printf("[INFO] (ctrl) driver initialized")
 
-	// TODO: separate by provider instances using workspaces.
 	// Future: improve by combining tasks into workflows.
 	log.Printf("[INFO] (ctrl) initializing all tasks")
 	tasks := newDriverTasks(rw.conf)
-	units := make([]unit, 0, len(tasks))
 
 	for _, task := range tasks {
-		d := rw.newDriver(rw.conf)
-		if err := d.Init(ctx); err != nil {
-			log.Printf("[ERR] (ctrl) error initializing driver: %s", err)
-			return err
-		}
 		log.Printf("[DEBUG] (ctrl) initializing task %q", task.Name)
-		err := d.InitTask(task, true)
+		tmpl, err := rw.driver.InitTask(task, true)
 		if err != nil {
 			log.Printf("[ERR] (ctrl) error initializing task %q: %s", task.Name, err)
 			return err
 		}
 
-		template, err := newTaskTemplate(task.Name, rw.conf, rw.fileReader)
-		if err != nil {
-			log.Printf("[ERR] (ctrl) error initializing template "+
-				"for task %q: %s", task.Name, err)
-			return err
-		}
-
-		units = append(units, unit{
-			taskName: task.Name,
-			template: template,
-			driver:   d,
-		})
+		rw.taskMux.Lock()
+		rw.taskTemplates[task.Name] = tmpl
+		rw.taskMux.Unlock()
 	}
 
-	rw.units = units
-
-	log.Printf("[INFO] (ctrl) driver initialized")
 	return nil
 }
 
@@ -127,8 +108,8 @@ func (rw *ReadWrite) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 
-		for err := range rw.runUnits(ctx) {
-			// aggregate error collector for runUnits, just logs everything for now
+		for err := range rw.runTasks(ctx) {
+			// aggregate error collector for runTasks, just logs everything for now
 			log.Printf("[ERR] (ctrl) %s", err)
 		}
 	}
@@ -136,19 +117,23 @@ func (rw *ReadWrite) Run(ctx context.Context) error {
 
 // A single run through of all the units/tasks/templates
 // Returned error channel closes when done with all units
-func (rw *ReadWrite) runUnits(ctx context.Context) chan error {
+func (rw *ReadWrite) runTasks(ctx context.Context) chan error {
 	// keep error chan and waitgroup here to keep runTask simple (on task)
 	errCh := make(chan error, 1)
 	wg := sync.WaitGroup{}
-	for _, u := range rw.units {
+
+	rw.taskMux.RLock()
+	defer rw.taskMux.RUnlock()
+
+	for taskName := range rw.taskTemplates {
 		wg.Add(1)
-		go func(u unit) {
-			_, err := rw.checkApply(ctx, u)
+		go func(taskName string) {
+			_, err := rw.checkApply(ctx, taskName)
 			if err != nil {
 				errCh <- err
 			}
 			wg.Done()
-		}(u)
+		}(taskName)
 	}
 
 	go func() {
@@ -164,21 +149,25 @@ func (rw *ReadWrite) runUnits(ctx context.Context) chan error {
 func (rw *ReadWrite) Once(ctx context.Context) error {
 	log.Println("[INFO] (ctrl) executing all tasks once through")
 
-	completed := make(map[string]bool, len(rw.units))
+	completed := make(map[string]bool, len(rw.taskTemplates))
 	for {
 		done := true
-		for _, u := range rw.units {
-			if !completed[u.taskName] {
-				complete, err := rw.checkApply(ctx, u)
+		rw.taskMux.RLock()
+		for taskName := range rw.taskTemplates {
+			if !completed[taskName] {
+				complete, err := rw.checkApply(ctx, taskName)
 				if err != nil {
+					rw.taskMux.RUnlock()
 					return err
 				}
-				completed[u.taskName] = complete
+				completed[taskName] = complete
 				if !complete && done {
 					done = false
 				}
 			}
 		}
+		rw.taskMux.RUnlock()
+
 		if done {
 			log.Println("[INFO] (ctrl) all tasks completed once")
 			return nil
@@ -196,11 +185,9 @@ func (rw *ReadWrite) Once(ctx context.Context) error {
 	}
 }
 
-// Single run, render, apply of a unit (task)
-func (rw *ReadWrite) checkApply(ctx context.Context, u unit) (bool, error) {
-	tmpl := u.template
-	taskName := u.taskName
-
+// checkApply is a single run, render, apply of a task. This method expects the caller
+// has a hold of a read lock.
+func (rw *ReadWrite) checkApply(ctx context.Context, taskName string, tmpl template.Template) (bool, error) {
 	log.Printf("[TRACE] (ctrl) checking dependencies changes for task %s", taskName)
 	result, err := rw.resolver.Run(tmpl, rw.watcher)
 	if err != nil {
@@ -220,9 +207,8 @@ func (rw *ReadWrite) checkApply(ctx context.Context, u unit) (bool, error) {
 		}
 		log.Printf("[TRACE] (ctrl) template for task %q rendered: %+v", taskName, rendered)
 
-		d := u.driver
 		log.Printf("[INFO] (ctrl) executing task %s", taskName)
-		if err := d.ApplyTask(ctx); err != nil {
+		if err := rw.driver.ApplyTask(ctx, taskName); err != nil {
 			return false, fmt.Errorf("could not apply changes for task %s: %s", taskName, err)
 		}
 
@@ -252,14 +238,16 @@ func (rw *ReadWrite) setTemplateBufferPeriods() {
 	}
 
 	var unsetIDs []string
-	for _, u := range rw.units {
-		taskConfig := taskConfigs[u.taskName]
+	rw.taskMux.RLock()
+	for taskName, tmpl := range rw.taskTemplates {
+		taskConfig := taskConfigs[taskName]
 		if buffPeriod := *taskConfig.BufferPeriod; *buffPeriod.Enabled {
-			rw.watcher.SetBufferPeriod(*buffPeriod.Min, *buffPeriod.Max, u.template.ID())
+			rw.watcher.SetBufferPeriod(*buffPeriod.Min, *buffPeriod.Max, tmpl.ID())
 		} else {
-			unsetIDs = append(unsetIDs, u.template.ID())
+			unsetIDs = append(unsetIDs, tmpl.ID())
 		}
 	}
+	rw.taskMux.RUnlock()
 
 	// Set default buffer period for unset templates
 	if buffPeriod := *rw.conf.BufferPeriod; *buffPeriod.Enabled {
